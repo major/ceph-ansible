@@ -16,12 +16,56 @@
 
   gather_facts: false
 
-  tasks:
+  pre_tasks:
     - name: gather and delegate facts
       setup:
       delegate_to: "{{ item }}"
       delegate_facts: True
       with_items: "{{ groups['all'] }}"
+
+  roles:
+    - ceph-defaults
+
+  post_tasks:
+    - name: check if it is atomic host
+      stat:
+        path: /run/ostree-booted
+      register: ostree
+
+    - name: set_fact is_atomic
+      set_fact:
+        atomic: '{{ ostree.stat.exists }}'
+
+    - name: test if docker is present
+      command: command -v dockerd-current
+      failed_when: false
+      register: docker_present
+
+    - name: start docker service
+      service:
+        name: docker
+        state: started
+        enabled: yes
+      when:
+        - docker_present.rc == 0
+
+    - name: wait for docker to be ready
+      command: docker ps -q
+      register: docker_status
+      failed_when: false
+      changed_when: false
+      until: docker_status.rc == 0
+      retries: 5
+      delay: 3
+      when:
+        - docker_present.rc == 0
+
+    - name: "pull {{ ceph_docker_image }} image"
+      command: "docker pull {{ ceph_docker_registry}}/{{ ceph_docker_image }}:{{ ceph_docker_image_tag }}"
+      changed_when: false
+      when:
+        - atomic or docker_present.rc == 0
+        - (ceph_docker_dev_image is undefined or not ceph_docker_dev_image)
 
 - hosts: mons
   become: True
